@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter, useParams } from "next/navigation";
 import logo from "@/assets/logo.png";
-
+import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { firebaseDB } from "@/lib/firebase_config";
+import { v4 as uuidv4 } from "uuid";
+import { supabase } from "@/lib/supabase_client";
 
 type Task = {
   id: string;
@@ -13,61 +16,137 @@ type Task = {
   detail: string;
   is_complete: boolean;
   image_url: string;
-  create_at: string;
-  update_at: string;
+  create_at?: string;
+  update_at?: string;
 };
 
 export default function EditTaskPage() {
   const router = useRouter();
   const params = useParams();
-  const taskId = params?.id as string;
+  const { id } = params;
 
-  const [title, setTitle] = useState<string>("");
-  const [detail, setDetail] = useState<string>("");
-  const [isComplete, setIsComplete] = useState<boolean>(false);
+  const [task, setTask] = useState<Task | null>(null);
+  const [title, setTitle] = useState("");
+  const [detail, setDetail] = useState("");
+  const [isComplete, setIsComplete] = useState(false);
   const [imageUrl, setImageUrl] = useState<string>("");
-  const [originalImageUrl, setOriginalImageUrl] = useState<string>("");
-  const [loading, setLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [newImageFile, setNewImageFile] = useState<File | null>(null);
-  const [newImagePreview, setNewImagePreview] = useState<string>("");
+  const [previewFile, setPreviewFile] = useState<string>("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
 
+  // 🔹 Fetch task data
+  useEffect(() => {
+    async function fetchTask() {
+      try {
+        const docRef = doc(firebaseDB, "tasks", id as string);
+        const docSnap = await getDoc(docRef);
 
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          const fetchedTask: Task = {
+            id: docSnap.id,
+            title: data.title || "",
+            detail: data.detail || "",
+            is_complete: data.is_complete || false,
+            image_url: data.image_url || "",
+            create_at: data.create_at || "",
+            update_at: data.update_at || "",
+          };
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+          setTask(fetchedTask);
+          setTitle(fetchedTask.title);
+          setDetail(fetchedTask.detail);
+          setIsComplete(fetchedTask.is_complete);
+          setImageUrl(fetchedTask.image_url);
+        } else {
+          alert("ไม่พบบันทึกงานนี้");
+          router.push("/alltask");
+        }
+      } catch (error) {
+        console.error("Error fetching task:", error);
+        alert("เกิดข้อผิดพลาดในการโหลดข้อมูลงาน");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    if (id) fetchTask();
+  }, [id, router]);
+
+  // 🔹 Handle image selection
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setNewImageFile(file);
-      const previewUrl = URL.createObjectURL(file);
-      setNewImagePreview(previewUrl);
+      const reader = new FileReader();
+      reader.onload = () => {
+        setPreviewFile(reader.result as string);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
-  const handleRemoveNewImage = () => {
-    setNewImageFile(null);
-    if (newImagePreview) {
-      URL.revokeObjectURL(newImagePreview);
-      setNewImagePreview("");
-    }
-  };
-
-  const handleRemoveOldImage = async () => {
-    if (!originalImageUrl) return;
-    const confirmDelete = confirm("คุณต้องการลบรูปภาพเก่าหรือไม่?");
-    if (!confirmDelete) return;
-
-
-  };
-
+  // 🔹 Handle update submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
       alert("กรุณากรอกชื่องาน");
       return;
     }
+
     setIsSubmitting(true);
+    try {
+      let updatedImageUrl = imageUrl;
 
+      // If user uploaded new image → upload to Supabase
+      if (newImageFile) {
+        const fileName = `${uuidv4()}-${newImageFile.name}`;
 
+        const { error: uploadError } = await supabase.storage
+          .from("manageApp")
+          .upload(fileName, newImageFile, { cacheControl: "3600", upsert: false });
+
+        if (uploadError) {
+          console.error("Upload error:", uploadError);
+          alert("เกิดข้อผิดพลาดในการอัปโหลดรูปภาพ");
+          setIsSubmitting(false);
+          return;
+        }
+
+        const { data: publicUrlData } = supabase.storage
+          .from("manageApp")
+          .getPublicUrl(fileName);
+
+        updatedImageUrl = publicUrlData.publicUrl;
+      }
+
+      // Update Firestore document
+      const docRef = doc(firebaseDB, "tasks", id as string);
+      await updateDoc(docRef, {
+        title,
+        detail,
+        is_complete: isComplete,
+        image_url: updatedImageUrl,
+        update_at: new Date().toISOString(),
+      });
+
+      alert("อัปเดตข้อมูลงานเรียบร้อยแล้ว");
+      router.push("/alltask");
+    } catch (error) {
+      console.error("Error updating task:", error);
+      alert("เกิดข้อผิดพลาดในการอัปเดตข้อมูลงาน");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (loading) {
+    return <p className="text-center mt-20">กำลังโหลดข้อมูลงาน...</p>;
+  }
+
+  if (!task) {
+    return <p className="text-center mt-20">ไม่พบบันทึกงาน</p>;
   }
 
   return (
@@ -75,12 +154,12 @@ export default function EditTaskPage() {
       <div className="flex flex-col items-center mt-20">
         <Image src={logo} alt="Logo" width={150} height={150} />
         <h1 className="text-2xl font-bold mt-5">Manage Task App</h1>
-        <h1 className="text-2xl font-bold">แก้ไขงานที่ต้องทำ</h1>
+        <h1 className="text-2xl font-bold">แก้ไขงานที่เลือก</h1>
       </div>
 
       <div className="flex flex-col justify-center mt-10 border border-gray-400 rounded-xl p-10">
-        <h1 className="text-xl font-bold text-center">แก้ไขงาน</h1>
         <form onSubmit={handleSubmit}>
+          {/* ชื่องาน */}
           <div className="flex flex-col mt-5">
             <label className="text-lg font-bold">งานที่ทำ</label>
             <input
@@ -92,8 +171,9 @@ export default function EditTaskPage() {
             />
           </div>
 
+          {/* รายละเอียด */}
           <div className="flex flex-col mt-5">
-            <label className="text-lg font-bold">รายละเอียดงานที่ทำ</label>
+            <label className="text-lg font-bold">รายละเอียดงาน</label>
             <textarea
               className="border border-gray-300 rounded-lg p-2"
               value={detail}
@@ -103,65 +183,59 @@ export default function EditTaskPage() {
             />
           </div>
 
+          {/* อัปโหลดรูป */}
           <div className="flex flex-col mt-5">
-            <label className="text-lg font-bold">รูปภาพ</label>
+            <label className="text-lg font-bold">อัปโหลดรูปภาพใหม่ (ถ้ามี)</label>
+            <input
+              id="fileInput"
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <label
+              htmlFor="fileInput"
+              className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-32 text-center mt-2 cursor-pointer"
+            >
+              เลือกรูป
+            </label>
 
-            {imageUrl && !newImagePreview && (
-              <div className="mt-3 flex flex-col">
-                <img
-                  src={imageUrl}
-                  alt={title}
-                  className="w-40 h-40 object-cover rounded-lg border"
-                />
-                <button
-                  type="button"
-                  onClick={handleRemoveOldImage}
-                  className="bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-3 rounded mt-2 w-40"
-                >
-                  ลบรูปเก่า
-                </button>
-              </div>
-            )}
-
-            {newImagePreview && (
-              <div className="mt-3 flex flex-col">
-                <p className="text-sm text-green-600 mb-2">รูปใหม่:</p>
-                <img
-                  src={newImagePreview}
-                  alt="Preview"
-                  className="w-40 h-40 object-cover rounded-lg border"
-                />
-                <button
-                  type="button"
-                  onClick={handleRemoveNewImage}
-                  className="bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-3 rounded mt-2 w-40"
-                >
-                  ลบรูปใหม่
-                </button>
-              </div>
-            )}
-
-            <div className="mt-3">
-              <label
-                htmlFor="image-upload"
-                className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded cursor-pointer inline-block"
-              >
-                {imageUrl || newImagePreview ? "เปลี่ยนรูปภาพ" : "เลือกรูปภาพ"}
-              </label>
-              <input
-                id="image-upload"
-                type="file"
-                accept="image/*"
-                onChange={handleImageChange}
-                className="hidden"
-              />
+            {/* แสดงรูปเก่า + preview ใหม่ */}
+            <div className="flex mt-3 gap-5">
+              {imageUrl && !previewFile && (
+                <div>
+                  <p className="text-sm text-gray-500">รูปเดิม:</p>
+                  <img
+                    src={imageUrl}
+                    alt="Old"
+                    className="w-40 h-40 object-cover rounded-lg border"
+                  />
+                </div>
+              )}
+              {previewFile && (
+                <div>
+                  <p className="text-sm text-gray-500">รูปใหม่:</p>
+                  <img
+                    src={previewFile}
+                    alt="Preview"
+                    className="w-40 h-40 object-cover rounded-lg border"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewImageFile(null);
+                      setPreviewFile("");
+                    }}
+                    className="mt-2 bg-red-500 hover:bg-red-700 text-white font-bold py-1 px-3 rounded"
+                  >
+                    ลบรูป
+                  </button>
+                </div>
+              )}
             </div>
-
-            {!imageUrl && !newImagePreview && (
-              <p className="text-gray-500 mt-2">ไม่มีรูปภาพ</p>
-            )}
           </div>
 
+          {/* สถานะงาน */}
           <div className="flex items-center mt-5">
             <label className="text-lg font-bold">สถานะงาน</label>
             <select
@@ -174,16 +248,17 @@ export default function EditTaskPage() {
             </select>
           </div>
 
+          {/* ปุ่มบันทึก */}
           <div className="flex justify-center mt-10">
             <button
               type="submit"
               disabled={isSubmitting}
               className={`${isSubmitting
-                  ? "bg-gray-400 cursor-not-allowed"
-                  : "bg-green-500 hover:bg-green-700"
+                ? "bg-gray-400 cursor-not-allowed"
+                : "bg-green-500 hover:bg-green-700"
                 } text-white font-bold py-3 px-4 rounded`}
             >
-              {isSubmitting ? "กำลังบันทึก..." : "บันทึกการแก้ไข"}
+              {isSubmitting ? "กำลังบันทึก..." : "อัปเดตงาน"}
             </button>
           </div>
         </form>
@@ -191,7 +266,7 @@ export default function EditTaskPage() {
 
       <div className="flex justify-center mt-10">
         <Link href="/alltask" className="text-blue-500 font-bold">
-          {"<"} กลับไปดูงานทั้งหมด
+          ← กลับไปดูงานทั้งหมด
         </Link>
       </div>
     </div>

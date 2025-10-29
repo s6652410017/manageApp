@@ -47,7 +47,7 @@ export default function Page() {
         const fileName = `${uuidv4()}-${imageFile.name}`;
 
         const { error: uploadError } = await supabase.storage
-          .from("idonknow")
+          .from("manageApp")
           .upload(fileName, imageFile, {
             cacheControl: "3600",
             upsert: false,
@@ -61,7 +61,7 @@ export default function Page() {
         }
 
         const { data: publicUrlData } = supabase.storage
-          .from("idonknow")
+          .from("manageApp")
           .getPublicUrl(fileName);
 
         imageUrl = publicUrlData.publicUrl;
